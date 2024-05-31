@@ -25,9 +25,10 @@ class DashscopeBot(Bot):
         super().__init__()
         self.sessions = SessionManager(DashscopeSession, model=conf().get("model") or "qwen-plus")
         self.model_name = conf().get("model") or "qwen-plus"
+        self.app_id = conf().get("dashscope_app_id")
         self.api_key = conf().get("dashscope_api_key")
         os.environ["DASHSCOPE_API_KEY"] = self.api_key
-        self.client = dashscope.Generation
+        self.client = dashscope.Application
 
     def reply(self, query, context=None):
         # acquire reply content
@@ -51,24 +52,48 @@ class DashscopeBot(Bot):
             session = self.sessions.session_query(query, session_id)
             logger.debug("[DASHSCOPE] session query={}".format(session.messages))
 
-            reply_content = self.reply_text(session)
+            response = self.client.call(app_id=self.app_id,
+                                        prompt=query,
+                                        api_key=self.api_key,
+                                        session=session.session_id,
+                                        # headers={"X-DashScope-SSE": "enable"},
+                                        # stream=True,
+                                        )
             logger.debug(
-                "[DASHSCOPE] new_query={}, session_id={}, reply_cont={}, completion_tokens={}".format(
-                    session.messages,
+                "[DASHSCOPE] new_query={}, session_id={}, response.status_code={}, response.message={}".format(
+                    query,
                     session_id,
-                    reply_content["content"],
-                    reply_content["completion_tokens"],
+                    response.status_code,
+                    response.message,
                 )
             )
-            if reply_content["completion_tokens"] == 0 and len(reply_content["content"]) > 0:
-                reply = Reply(ReplyType.ERROR, reply_content["content"])
-            elif reply_content["completion_tokens"] > 0:
-                self.sessions.session_reply(reply_content["content"], session_id, reply_content["total_tokens"])
-                reply = Reply(ReplyType.TEXT, reply_content["content"])
+
+            if response.status_code != HTTPStatus.OK:
+                logger.debug("[DASHSCOPE] reply error or empty.")
+                reply = Reply(ReplyType.ERROR, response.message)
             else:
-                reply = Reply(ReplyType.ERROR, reply_content["content"])
-                logger.debug("[DASHSCOPE] reply {} used 0 tokens.".format(reply_content))
+                reply = Reply(ReplyType.TEXT,  response.output.text)
+
             return reply
+
+            #reply_content = self.reply_text(session)
+            #logger.debug(
+            #    "[DASHSCOPE] new_query={}, session_id={}, reply_cont={}, completion_tokens={}".format(
+            #        session.messages,
+            #        session_id,
+            #        reply_content["content"],
+            #        reply_content["completion_tokens"],
+            #    )
+            #)
+            #if reply_content["completion_tokens"] == 0 and len(reply_content["content"]) > 0:
+            #    reply = Reply(ReplyType.ERROR, reply_content["content"])
+            #elif reply_content["completion_tokens"] > 0:
+            #    self.sessions.session_reply(reply_content["content"], session_id, reply_content["total_tokens"])
+            #    reply = Reply(ReplyType.TEXT, reply_content["content"])
+            #else:
+            #    reply = Reply(ReplyType.ERROR, reply_content["content"])
+            #    logger.debug("[DASHSCOPE] reply {} used 0 tokens.".format(reply_content))
+            #return reply
         else:
             reply = Reply(ReplyType.ERROR, "Bot不支持处理{}类型的消息".format(context.type))
             return reply
